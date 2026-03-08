@@ -1215,53 +1215,73 @@ function renderConnections() {
 
     const fbox = fel.querySelector('.node-box') || fel;
     const tbox = tel.querySelector('.node-box') || tel;
+
+    // node-box may be centered inside .node (action bar can be wider)
+    // use offsetLeft within parent to get true x offset of box
+    const fBoxOffX = fbox.offsetLeft || 0;
+    const tBoxOffX = tbox.offsetLeft || 0;
+
     const fw = fbox.offsetWidth,  fh = fbox.offsetHeight;
     const tw = tbox.offsetWidth,  th = tbox.offsetHeight;
 
-    // Centers of each node
-    const fcx = fn.x + fw/2, fcy = fn.y + fh/2;
-    const tcx = tn.x + tw/2, tcy = tn.y + th/2;
+    // True canvas coords of each box's edges
+    const fL = fn.x + fBoxOffX;
+    const fT = fn.y;
+    const fR = fn.x + fBoxOffX + fw;
+    const fB = fn.y + fh;
+    const fCX = fL + fw/2;
+    const fCY = fT + fh/2;
 
-    const dx = tcx - fcx; // positive = target is to the right
-    const dy = tcy - fcy; // positive = target is below
+    const tL = tn.x + tBoxOffX;
+    const tT = tn.y;
+    const tR = tn.x + tBoxOffX + tw;
+    const tB = tn.y + th;
+    const tCX = tL + tw/2;
+    const tCY = tT + th/2;
 
-    // Decide which edges to connect based on dominant direction
-    let fx, fy, tx, ty, cp1x, cp1y, cp2x, cp2y;
-    const VERT_BIAS = 0.6; // prefer horizontal unless clearly vertical
+    const dx = tCX - fCX;
+    const dy = tCY - fCY;
+
+    let fx, fy, tx, ty, cp1x, cp1y, cp2x, cp2y, arrowAngle;
+    const VERT_BIAS = 0.7;
 
     if (Math.abs(dy) > Math.abs(dx) * (1 / VERT_BIAS)) {
-      // Vertical dominant — connect top/bottom
+      // ── Vertical ──
       if (dy > 0) {
-        // target is BELOW — exit from bottom of source, enter top of target
-        fx = fn.x + fw/2;  fy = fn.y + fh;
-        tx = tn.x + tw/2;  ty = tn.y;
-        const mid = (fy + ty) / 2;
-        cp1x = fx; cp1y = mid;
-        cp2x = tx; cp2y = mid;
+        // target BELOW
+        fx = fCX; fy = fB;
+        tx = tCX; ty = tT;
+        const gap = Math.max(30, Math.abs(ty - fy) * 0.45);
+        cp1x = fx; cp1y = fy + gap;
+        cp2x = tx; cp2y = ty - gap;
+        arrowAngle = Math.PI / 2;
       } else {
-        // target is ABOVE — exit from top of source, enter bottom of target
-        fx = fn.x + fw/2;  fy = fn.y;
-        tx = tn.x + tw/2;  ty = tn.y + th;
-        const mid = (fy + ty) / 2;
-        cp1x = fx; cp1y = mid;
-        cp2x = tx; cp2y = mid;
+        // target ABOVE
+        fx = fCX; fy = fT;
+        tx = tCX; ty = tB;
+        const gap = Math.max(30, Math.abs(fy - ty) * 0.45);
+        cp1x = fx; cp1y = fy - gap;
+        cp2x = tx; cp2y = ty + gap;
+        arrowAngle = -Math.PI / 2;
       }
     } else {
-      // Horizontal dominant — connect left/right
+      // ── Horizontal ──
       if (dx > 0) {
-        // target is to the RIGHT — exit right of source, enter left of target
-        fx = fn.x + fw;  fy = fn.y + fh/2;
-        tx = tn.x;       ty = tn.y + th/2;
-        const mid = (fx + tx) / 2;
-        cp1x = mid; cp1y = fy;
-        cp2x = mid; cp2y = ty;
+        // target RIGHT
+        fx = fR; fy = fCY;
+        tx = tL; ty = tCY;
+        const gap = Math.max(30, Math.abs(tx - fx) * 0.45);
+        cp1x = fx + gap; cp1y = fy;
+        cp2x = tx - gap; cp2y = ty;
+        arrowAngle = 0;
       } else {
-        // target is to the LEFT — exit left of source, enter right of target
-        fx = fn.x;       fy = fn.y + fh/2;
-        tx = tn.x + tw;  ty = tn.y + th/2;
-        const mid = (fx + tx) / 2;
-        cp1x = mid; cp1y = fy;
-        cp2x = mid; cp2y = ty;
+        // target LEFT
+        fx = fL; fy = fCY;
+        tx = tR; ty = tCY;
+        const gap = Math.max(30, Math.abs(fx - tx) * 0.45);
+        cp1x = fx - gap; cp1y = fy;
+        cp2x = tx + gap; cp2y = ty;
+        arrowAngle = Math.PI;
       }
     }
 
@@ -1275,15 +1295,14 @@ function renderConnections() {
     path.title = 'Right-click to remove';
     svg.appendChild(path);
 
-    // Arrow tip — angle based on approach direction into target
-    const angle = Math.atan2(ty - cp2y, tx - cp2x);
-    const al = 10;
-    const ax1 = tx - al*Math.cos(angle-0.4), ay1 = ty - al*Math.sin(angle-0.4);
-    const ax2 = tx - al*Math.cos(angle+0.4), ay2 = ty - al*Math.sin(angle+0.4);
+    // Arrow pointing into target
+    const al = 11;
+    const ax1 = tx - al*Math.cos(arrowAngle - 0.42), ay1 = ty - al*Math.sin(arrowAngle - 0.42);
+    const ax2 = tx - al*Math.cos(arrowAngle + 0.42), ay2 = ty - al*Math.sin(arrowAngle + 0.42);
     const arrow = document.createElementNS('http://www.w3.org/2000/svg','path');
     arrow.setAttribute('d',`M${tx},${ty} L${ax1},${ay1} L${ax2},${ay2} Z`);
     arrow.setAttribute('fill', destColor);
-    arrow.setAttribute('opacity','0.8');
+    arrow.setAttribute('opacity','0.9');
     svg.appendChild(arrow);
   });
 }
