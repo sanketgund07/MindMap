@@ -224,6 +224,8 @@
   /* per-button accent colors on hover */
   .node-action-btn.btn-add:hover  { background: rgba(124,106,247,0.25); color: #a99fff; }
   .node-action-btn.btn-add:hover span.lbl { color: #a99fff; }
+  .node-action-btn.btn-sib:hover  { background: rgba(42,232,240,0.2); color: #2ae8f0; }
+  .node-action-btn.btn-sib:hover span.lbl { color: #2ae8f0; }
   .node-action-btn.btn-conn:hover { background: rgba(67,232,216,0.2); color: #43e8d8; }
   .node-action-btn.btn-conn:hover span.lbl { color: #43e8d8; }
   .node-action-btn.btn-img:hover  { background: rgba(249,166,64,0.2); color: #f9a640; }
@@ -855,7 +857,9 @@
 <!-- Help -->
 <div id="help">
   <strong>Shortcuts</strong><br>
-  N — New node<br>
+  Tab — Add child node<br>
+  Enter — Add sibling node<br>
+  N — New floating node<br>
   Del — Delete selected<br>
   F — Fit to screen<br>
   L — Auto layout<br>
@@ -864,7 +868,7 @@
   Ctrl+A — Select all<br>
   Ctrl+F — Search<br>
   Scroll — Zoom<br>
-  Drag node edge — Connect<br>
+  Drag node — Moves whole branch<br>
   Right-click node — Menu
 </div>
 
@@ -975,7 +979,9 @@ function renderNode(id) {
         </div>
       </div>
       <div class="node-actions">
-        <button class="node-action-btn btn-add" title="Add child node (Tab)" onclick="addChildNode('${id}')">＋<span class="lbl">Child</span></button>
+        <button class="node-action-btn btn-add" title="Add child node (Tab)" onclick="addChildNode('${id}')">⊕<span class="lbl">Child</span></button>
+        <div class="node-action-sep"></div>
+        <button class="node-action-btn btn-sib" title="Add sibling node" onclick="addSiblingNode('${id}')">⊞<span class="lbl">Sibling</span></button>
         <div class="node-action-sep"></div>
         <button class="node-action-btn btn-conn" title="Drag to connect nodes" onmousedown="startConnect(event,'${id}')">⤳<span class="lbl">Link</span></button>
         <div class="node-action-sep"></div>
@@ -1090,7 +1096,7 @@ function initNodeEvents(el, id) {
   titleEl.addEventListener('mousedown', e => e.stopPropagation());
   titleEl.addEventListener('keydown', e => {
     if (e.key === 'Tab') { e.preventDefault(); addChildNode(id); }
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); titleEl.blur(); }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addSiblingNode(id); }
   });
 
   // note input
@@ -1135,8 +1141,8 @@ function autoResizeTextarea(ta) {
 
 // ── Node Dragging ─────────────────────────────────────────
 function initNodeDrag(el, id) {
-  let startX, startY, origX, origY, moved = false;
-  let multiStart = {};
+  let startX, startY, moved = false;
+  let dragGroup = {}; // id -> {origX, origY}
 
   el.addEventListener('mousedown', e => {
     if (e.target.closest('button') || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'A') return;
@@ -1144,12 +1150,21 @@ function initNodeDrag(el, id) {
     e.stopPropagation();
 
     startX = e.clientX; startY = e.clientY;
-    origX = nodes[id].x; origY = nodes[id].y; moved = false;
-    multiStart = {};
+    moved = false;
+    dragGroup = {};
 
-    // record start pos for all selected nodes
-    selectedNodes.forEach(sid => { multiStart[sid] = { x: nodes[sid].x, y: nodes[sid].y }; });
-    if (!multiStart[id]) { multiStart[id] = { x: origX, y: origY }; }
+    // Always drag the whole subtree of this node
+    const subtree = getSubtreeIds(id);
+    // If multi-select and node is in selection, drag all selected nodes
+    if (selectedNodes.has(id) && selectedNodes.size > 1) {
+      selectedNodes.forEach(sid => {
+        dragGroup[sid] = { origX: nodes[sid].x, origY: nodes[sid].y };
+      });
+    } else {
+      subtree.forEach(sid => {
+        if (nodes[sid]) dragGroup[sid] = { origX: nodes[sid].x, origY: nodes[sid].y };
+      });
+    }
 
     el.classList.add('dragging-node');
 
@@ -1159,20 +1174,12 @@ function initNodeDrag(el, id) {
       if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
       if (!moved) return;
 
-      if (selectedNodes.has(id)) {
-        selectedNodes.forEach(sid => {
-          if (!multiStart[sid]) return;
-          nodes[sid].x = multiStart[sid].x + dx;
-          nodes[sid].y = multiStart[sid].y + dy;
-          const nodeEl = document.getElementById('node-'+sid);
-          if (nodeEl) { nodeEl.style.left = nodes[sid].x+'px'; nodeEl.style.top = nodes[sid].y+'px'; }
-        });
-      } else {
-        nodes[id].x = origX + dx;
-        nodes[id].y = origY + dy;
-        el.style.left = nodes[id].x+'px';
-        el.style.top  = nodes[id].y+'px';
-      }
+      Object.entries(dragGroup).forEach(([sid, orig]) => {
+        nodes[sid].x = orig.origX + dx;
+        nodes[sid].y = orig.origY + dy;
+        const nodeEl = document.getElementById('node-'+sid);
+        if (nodeEl) { nodeEl.style.left = nodes[sid].x+'px'; nodeEl.style.top = nodes[sid].y+'px'; }
+      });
       renderConnections();
       updateMinimap();
     };
@@ -1503,72 +1510,107 @@ function fitToScreen() {
 }
 
 // ── Auto Layout ───────────────────────────────────────────
-function autoLayout() {
-  // Find root nodes (no incoming connections)
-  const hasParent = new Set(connections.map(c=>c.to));
+const HGAP = 240, VGAP = 72;
+
+function getChildren(id) {
+  return connections.filter(c => c.from === id).map(c => c.to);
+}
+function getParent(id) {
+  const c = connections.find(c => c.to === id);
+  return c ? c.from : null;
+}
+function getSubtreeIds(id, visited = new Set()) {
+  if (visited.has(id)) return visited;
+  visited.add(id);
+  getChildren(id).forEach(cid => getSubtreeIds(cid, visited));
+  return visited;
+}
+
+// Measure subtree height (in units)
+function subtreeHeight(id, memo = {}) {
+  if (memo[id] !== undefined) return memo[id];
+  const ch = getChildren(id);
+  if (!ch.length) { memo[id] = 1; return 1; }
+  memo[id] = ch.reduce((sum, cid) => sum + subtreeHeight(cid, memo), 0);
+  return memo[id];
+}
+
+// Lay out subtree rooted at id, placing root at (rx, ry)
+// direction: 'right' | 'left'
+function layoutSubtree(id, rx, ry, direction, memo = {}) {
+  nodes[id].x = rx;
+  nodes[id].y = ry;
+  const ch = getChildren(id);
+  if (!ch.length) return;
+  const heights = ch.map(cid => subtreeHeight(cid, memo));
+  const total = heights.reduce((a, b) => a + b, 0);
+  const totalPx = (total - 1) * VGAP;
+  let curY = ry - totalPx / 2;
+  const xSign = direction === 'right' ? 1 : -1;
+  const childX = rx + xSign * HGAP;
+  ch.forEach((cid, i) => {
+    const h = heights[i];
+    const subtreeCenterY = curY + ((h - 1) * VGAP) / 2;
+    layoutSubtree(cid, childX, subtreeCenterY, direction, memo);
+    curY += h * VGAP;
+  });
+}
+
+function autoLayout(silent = false) {
+  const hasParent = new Set(connections.map(c => c.to));
   const roots = Object.keys(nodes).filter(id => !hasParent.has(id));
   if (!roots.length) { showToast('No root found'); return; }
 
-  // BFS tree layout from each root
-  const positioned = new Set();
-  const HGAP = 220, VGAP = 80;
+  let offsetY = 3900;
+  roots.forEach(rid => {
+    const memo = {};
+    // Split children left and right from root like reference image
+    const ch = getChildren(rid);
+    const half = Math.ceil(ch.length / 2);
+    const rightCh = ch.slice(0, half);
+    const leftCh  = ch.slice(half);
 
-  function layoutTree(rootId, startX, startY) {
-    const queue = [{ id: rootId, depth: 0, siblingIdx: 0, siblingCount: 1 }];
-    const depthCounts = {};
-    const depthCounters = {};
-    // count nodes per depth
-    const visited = new Set();
-    const bfs = [{ id: rootId, depth: 0 }];
-    visited.add(rootId);
-    let bi = 0;
-    while (bi < bfs.length) {
-      const { id, depth } = bfs[bi++];
-      depthCounts[depth] = (depthCounts[depth]||0)+1;
-      connections.filter(c=>c.from===id&&!visited.has(c.to)).forEach(c=>{
-        visited.add(c.to); bfs.push({id:c.to,depth:depth+1});
-      });
-    }
-    Object.keys(depthCounts).forEach(d => depthCounters[d]=0);
+    // Temporarily redirect connections for layout
+    const origConns = connections.filter(c => c.from === rid);
 
-    const bfsOrder = [{id:rootId,depth:0}];
-    const vis2 = new Set([rootId]);
-    let b2=0;
-    while(b2<bfsOrder.length){
-      const {id,depth} = bfsOrder[b2++];
-      const cnt = depthCounts[depth];
-      const idx = depthCounters[depth]++;
-      const totalH = (cnt-1)*VGAP;
-      nodes[id].x = startX + depth*HGAP;
-      nodes[id].y = startY - totalH/2 + idx*VGAP;
-      positioned.add(id);
-      connections.filter(c=>c.from===id&&!vis2.has(c.to)).forEach(c=>{
-        vis2.add(c.to); bfsOrder.push({id:c.to,depth:depth+1});
-      });
-    }
-  }
+    // Layout right side
+    const rightConns = origConns.filter(c => rightCh.includes(c.to));
+    const leftConns  = origConns.filter(c => leftCh.includes(c.to));
 
-  let offsetY = 3800;
-  roots.forEach((rid,i) => {
-    layoutTree(rid, 3700, offsetY);
-    // estimate height
-    const cnt = Object.keys(nodes).filter(id=>!hasParent.has(id)||id===rid).length;
-    offsetY += Math.max(300, cnt*VGAP + 80);
+    nodes[rid].x = 3900;
+    nodes[rid].y = offsetY;
+
+    // right subtrees
+    const rightHeights = rightCh.map(cid => subtreeHeight(cid, memo));
+    const rightTotal = rightHeights.reduce((a,b) => a+b, 0);
+    let curY = offsetY - ((rightTotal-1)*VGAP)/2;
+    rightCh.forEach((cid, i) => {
+      const h = rightHeights[i];
+      layoutSubtree(cid, 3900 + HGAP, curY + ((h-1)*VGAP)/2, 'right', memo);
+      curY += h * VGAP;
+    });
+
+    // left subtrees
+    const leftHeights = leftCh.map(cid => subtreeHeight(cid, memo));
+    const leftTotal = leftHeights.reduce((a,b) => a+b, 0);
+    curY = offsetY - ((leftTotal-1)*VGAP)/2;
+    leftCh.forEach((cid, i) => {
+      const h = leftHeights[i];
+      layoutSubtree(cid, 3900 - HGAP, curY + ((h-1)*VGAP)/2, 'left', memo);
+      curY += h * VGAP;
+    });
+
+    const totalH = subtreeHeight(rid, {}) * VGAP;
+    offsetY += Math.max(totalH + 120, 300);
   });
 
-  // update DOM
   Object.keys(nodes).forEach(id => {
     const el = document.getElementById('node-'+id);
-    if (el && nodes[id]) {
-      el.style.left = nodes[id].x+'px';
-      el.style.top  = nodes[id].y+'px';
-    }
+    if (el) { el.style.left = nodes[id].x+'px'; el.style.top = nodes[id].y+'px'; }
   });
-
   renderConnections();
   saveUndo();
-  fitToScreen();
-  showToast('✦ Auto layout applied');
+  if (!silent) { fitToScreen(); showToast('✦ Layout applied'); }
 }
 
 // ── Selection ─────────────────────────────────────────────
@@ -1680,14 +1722,48 @@ function setNodeColor(id, idx) {
 function addChildNode(parentId) {
   const p = nodes[parentId];
   if (!p) return;
-  const offset = Object.keys(nodes).length * 5 % 80;
-  const newIdx = (_nodeCounter) % NODE_GRADIENTS.length;
-  const childId = createNode(p.x + 200, p.y + offset - 20, 'New Idea', newIdx);
+  // Pick color cycling from parent's color
+  const newIdx = ((p.colorIdx ?? 0) + 1) % NODE_GRADIENTS.length;
+  const childId = createNode(p.x + HGAP, p.y, 'New Idea', newIdx);
   connectNodes(parentId, childId);
+  autoLayoutFromRoot(parentId);
   setTimeout(() => {
     const t = document.getElementById('nt-'+childId);
     if (t) { t.focus(); t.select(); }
-  }, 60);
+  }, 80);
+}
+
+function addSiblingNode(nodeId) {
+  const parentId = getParent(nodeId);
+  if (!parentId) {
+    // No parent — add as new root
+    addFloatingNode(); return;
+  }
+  const p = nodes[parentId];
+  const newIdx = ((nodes[nodeId]?.colorIdx ?? 0)) % NODE_GRADIENTS.length;
+  const sibId = createNode(nodes[nodeId].x, nodes[nodeId].y + VGAP, 'New Idea', newIdx);
+  connectNodes(parentId, sibId);
+  autoLayoutFromRoot(parentId);
+  setTimeout(() => {
+    const t = document.getElementById('nt-'+sibId);
+    if (t) { t.focus(); t.select(); }
+  }, 80);
+}
+
+// Re-layout just the tree containing a given node
+function autoLayoutFromRoot(nodeId) {
+  // Walk up to find root
+  let root = nodeId;
+  const visited = new Set();
+  while (true) {
+    const p = getParent(root);
+    if (!p || visited.has(p)) break;
+    visited.add(p);
+    root = p;
+  }
+  // Determine direction of this branch (is root to left or right of canvas center?)
+  // Use full autoLayout for simplicity & correctness
+  autoLayout(true); // silent — don't move viewport
 }
 
 function addFloatingNode() {
