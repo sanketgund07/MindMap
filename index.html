@@ -1207,7 +1207,7 @@ function renderConnections() {
   connections.forEach((c, i) => {
     const fn = nodes[c.from], tn = nodes[c.to];
     if (!fn || !tn) return;
-    if (fn.collapsed) return; // hide if parent collapsed
+    if (fn.collapsed) return;
 
     const fel = document.getElementById('node-'+c.from);
     const tel = document.getElementById('node-'+c.to);
@@ -1215,19 +1215,59 @@ function renderConnections() {
 
     const fbox = fel.querySelector('.node-box') || fel;
     const tbox = tel.querySelector('.node-box') || tel;
-    const fw = fbox.offsetWidth, fh = fbox.offsetHeight;
-    const tw = tbox.offsetWidth, th = tbox.offsetHeight;
+    const fw = fbox.offsetWidth,  fh = fbox.offsetHeight;
+    const tw = tbox.offsetWidth,  th = tbox.offsetHeight;
 
-    const fx = fn.x + fw, fy = fn.y + fh/2;
-    const tx = tn.x,       ty = tn.y + th/2;
+    // Centers of each node
+    const fcx = fn.x + fw/2, fcy = fn.y + fh/2;
+    const tcx = tn.x + tw/2, tcy = tn.y + th/2;
 
-    const cp1x = fx + (tx-fx)*0.5, cp1y = fy;
-    const cp2x = tx - (tx-fx)*0.5, cp2y = ty;
+    const dx = tcx - fcx; // positive = target is to the right
+    const dy = tcy - fcy; // positive = target is below
+
+    // Decide which edges to connect based on dominant direction
+    let fx, fy, tx, ty, cp1x, cp1y, cp2x, cp2y;
+    const VERT_BIAS = 0.6; // prefer horizontal unless clearly vertical
+
+    if (Math.abs(dy) > Math.abs(dx) * (1 / VERT_BIAS)) {
+      // Vertical dominant — connect top/bottom
+      if (dy > 0) {
+        // target is BELOW — exit from bottom of source, enter top of target
+        fx = fn.x + fw/2;  fy = fn.y + fh;
+        tx = tn.x + tw/2;  ty = tn.y;
+        const mid = (fy + ty) / 2;
+        cp1x = fx; cp1y = mid;
+        cp2x = tx; cp2y = mid;
+      } else {
+        // target is ABOVE — exit from top of source, enter bottom of target
+        fx = fn.x + fw/2;  fy = fn.y;
+        tx = tn.x + tw/2;  ty = tn.y + th;
+        const mid = (fy + ty) / 2;
+        cp1x = fx; cp1y = mid;
+        cp2x = tx; cp2y = mid;
+      }
+    } else {
+      // Horizontal dominant — connect left/right
+      if (dx > 0) {
+        // target is to the RIGHT — exit right of source, enter left of target
+        fx = fn.x + fw;  fy = fn.y + fh/2;
+        tx = tn.x;       ty = tn.y + th/2;
+        const mid = (fx + tx) / 2;
+        cp1x = mid; cp1y = fy;
+        cp2x = mid; cp2y = ty;
+      } else {
+        // target is to the LEFT — exit left of source, enter right of target
+        fx = fn.x;       fy = fn.y + fh/2;
+        tx = tn.x + tw;  ty = tn.y + th/2;
+        const mid = (fx + tx) / 2;
+        cp1x = mid; cp1y = fy;
+        cp2x = mid; cp2y = ty;
+      }
+    }
 
     const path = document.createElementNS('http://www.w3.org/2000/svg','path');
     path.setAttribute('d', `M${fx},${fy} C${cp1x},${cp1y} ${cp2x},${cp2y} ${tx},${ty}`);
     path.setAttribute('class','conn-path');
-    // color matches destination node
     const destColor = NODE_GRADIENTS[tn.colorIdx !== undefined ? tn.colorIdx : 0].accent;
     path.setAttribute('stroke', destColor);
     path.dataset.idx = i;
@@ -1235,7 +1275,7 @@ function renderConnections() {
     path.title = 'Right-click to remove';
     svg.appendChild(path);
 
-    // arrow
+    // Arrow tip — angle based on approach direction into target
     const angle = Math.atan2(ty - cp2y, tx - cp2x);
     const al = 10;
     const ax1 = tx - al*Math.cos(angle-0.4), ay1 = ty - al*Math.sin(angle-0.4);
